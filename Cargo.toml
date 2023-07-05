@@ -6,6 +6,7 @@ edition = "2021"
 license = "AGPL-3.0"
 repository = "https://github.com/pufmat/yxorp"
 categories = ["web-programming", "network-programming", "command-line-utilities"]
+description = "A reverse proxy with live reload and TLS support."
 
 [dependencies]
 futures-util = "0.3.28"
