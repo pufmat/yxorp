@@ -4,6 +4,7 @@ use crate::error::StringError;
 
 use core::task::{Context, Poll};
 use hyper::client::{HttpConnector, ResponseFuture};
+use hyper::http::uri::Scheme;
 use hyper::http::HeaderValue;
 use hyper::server::conn::AddrIncoming;
 use hyper::service::{make_service_fn, Service};
@@ -149,9 +150,9 @@ impl Proxy {
 	fn proxy(&self, mut req: Request<Body>, host: &str, address: &SocketAddr) -> ProxyFuture {
 		*req.version_mut() = Version::HTTP_11;
 		*req.uri_mut() = Uri::builder()
-			.scheme("http")
+			.scheme(Scheme::HTTP)
 			.authority(address.to_string())
-			.path_and_query(req.uri().path())
+			.path_and_query(req.uri().path_and_query().unwrap().clone())
 			.build()
 			.unwrap();
 
@@ -177,7 +178,7 @@ impl Proxy {
 
 		*out_req.version_mut() = Version::HTTP_11;
 		*out_req.uri_mut() = Uri::builder()
-			.path_and_query(req.uri().path())
+			.path_and_query(req.uri().path_and_query().unwrap().clone())
 			.build()
 			.unwrap();
 
