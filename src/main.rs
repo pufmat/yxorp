@@ -1,7 +1,5 @@
-mod acceptor;
 mod config;
-mod error;
-mod pem;
+mod proxy;
 mod server;
 
 fn main() {
