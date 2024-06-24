@@ -7,14 +7,11 @@ use hyper::{
 	body::{Body, Bytes, Frame, Incoming, SizeHint},
 	client::conn::http1,
 	header,
-	http::{uri::Scheme, HeaderValue},
+	http::HeaderValue,
 	service::Service,
 	HeaderMap, Request, Response, StatusCode, Uri, Version,
 };
-use hyper_util::{
-	client::legacy::{connect::HttpConnector, Client, ResponseFuture},
-	rt::TokioIo,
-};
+use hyper_util::rt::TokioIo;
 use itertools::Itertools;
 use pin_project::pin_project;
 use std::{
@@ -27,28 +24,19 @@ use tokio::{net::TcpStream, try_join};
 
 pub struct Proxy {
 	secure: bool,
-	client: Client<HttpConnector, Incoming>,
 	dynamic_config: Arc<RwLock<DynamicConfig>>,
 }
 
 impl Proxy {
-	pub fn new_secure(
-		client: Client<HttpConnector, Incoming>,
-		dynamic_config: Arc<RwLock<DynamicConfig>>,
-	) -> Self {
+	pub fn new_secure(dynamic_config: Arc<RwLock<DynamicConfig>>) -> Self {
 		Self {
-			client,
 			dynamic_config,
 			secure: true,
 		}
 	}
 
-	pub fn new_unsecure(
-		client: Client<HttpConnector, Incoming>,
-		dynamic_config: Arc<RwLock<DynamicConfig>>,
-	) -> Self {
+	pub fn new_unsecure(dynamic_config: Arc<RwLock<DynamicConfig>>) -> Self {
 		Self {
-			client,
 			dynamic_config,
 			secure: false,
 		}
@@ -108,10 +96,8 @@ impl Proxy {
 
 	fn forward(&self, in_req: Request<Incoming>, host: &str, address: &SocketAddr) -> ProxyFuture {
 		let mut out_req = in_req;
-		*out_req.version_mut() = Version::default();
+		*out_req.version_mut() = Version::HTTP_11;
 		*out_req.uri_mut() = Uri::builder()
-			.scheme(Scheme::HTTP)
-			.authority(address.to_string())
 			.path_and_query(out_req.uri().path_and_query().unwrap().clone())
 			.build()
 			.unwrap();
@@ -126,7 +112,18 @@ impl Proxy {
 
 		self.merge_cookie_headers(out_req.headers_mut());
 
-		ProxyFuture::Response(self.client.request(out_req))
+		let address = *address;
+		return ProxyFuture::Boxed(Box::pin(async move {
+			let stream = TcpStream::connect(address).await?;
+			let (mut sender, conn) = http1::handshake(TokioIo::new(stream)).await?;
+
+			tokio::spawn(conn);
+
+			let in_res = sender.send_request(out_req).await?;
+			let out_res = in_res.map(ProxyBody::Incoming);
+
+			Ok(out_res)
+		}));
 	}
 
 	fn upgrade(&self, in_req: Request<Incoming>, host: &str, address: &SocketAddr) -> ProxyFuture {
@@ -134,7 +131,7 @@ impl Proxy {
 		out_req.headers_mut().clone_from(in_req.headers());
 		out_req.method_mut().clone_from(in_req.method());
 
-		*out_req.version_mut() = Version::default();
+		*out_req.version_mut() = Version::HTTP_11;
 		*out_req.uri_mut() = Uri::builder()
 			.path_and_query(in_req.uri().path_and_query().unwrap().clone())
 			.build()
@@ -269,7 +266,6 @@ impl Body for ProxyBody {
 
 #[pin_project(project = ProxyFutureProj)]
 pub enum ProxyFuture {
-	Response(#[pin] ResponseFuture),
 	Boxed(#[pin] Pin<Box<dyn Future<Output = Result<Response<ProxyBody>>> + Send + Sync>>),
 	Ready(#[pin] Ready<Result<Response<ProxyBody>>>),
 }
@@ -279,10 +275,6 @@ impl Future for ProxyFuture {
 
 	fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
 		match self.project() {
-			ProxyFutureProj::Response(response) => response
-				.poll(cx)
-				.map_ok(|response| response.map(ProxyBody::Incoming))
-				.map_err(|e| e.into()),
 			ProxyFutureProj::Boxed(boxed) => boxed.poll(cx),
 			ProxyFutureProj::Ready(ready) => ready.poll(cx),
 		}

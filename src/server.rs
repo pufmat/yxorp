@@ -4,9 +4,7 @@ use crate::{
 };
 
 use anyhow::{anyhow, Result};
-use hyper::body::Incoming;
 use hyper_util::{
-	client::legacy::{connect::HttpConnector, Client},
 	rt::{TokioExecutor, TokioIo},
 	server::conn::auto,
 };
@@ -39,17 +37,10 @@ pub async fn run() -> Result<()> {
 		.await
 		.map_err(|e| anyhow!("Failed to bind address {}: {}", https_addr, e))?;
 
-	let client = Client::builder(TokioExecutor::new()).build_http();
-
-	tokio::spawn(serve_unsecure(
-		http_listener,
-		client.clone(),
-		dynamic_config.clone(),
-	));
+	tokio::spawn(serve_unsecure(http_listener, dynamic_config.clone()));
 
 	tokio::spawn(serve_secure(
 		https_listener,
-		client,
 		dynamic_config.clone(),
 		server_config.clone(),
 	));
@@ -66,21 +57,16 @@ pub async fn run() -> Result<()> {
 	Ok(())
 }
 
-async fn serve_unsecure(
-	listener: TcpListener,
-	client: Client<HttpConnector, Incoming>,
-	dynamic_config: Arc<RwLock<DynamicConfig>>,
-) {
+async fn serve_unsecure(listener: TcpListener, dynamic_config: Arc<RwLock<DynamicConfig>>) {
 	loop {
 		if let Ok((stream, _)) = listener.accept().await {
-			let client = client.clone();
 			let dynamic_config = dynamic_config.clone();
 
 			tokio::spawn(async move {
 				let io = TokioIo::new(stream);
 
 				auto::Builder::new(TokioExecutor::new())
-					.serve_connection_with_upgrades(io, Proxy::new_unsecure(client, dynamic_config))
+					.serve_connection_with_upgrades(io, Proxy::new_unsecure(dynamic_config))
 					.await
 			});
 		}
@@ -89,13 +75,11 @@ async fn serve_unsecure(
 
 async fn serve_secure(
 	listener: TcpListener,
-	client: Client<HttpConnector, Incoming>,
 	dynamic_config: Arc<RwLock<DynamicConfig>>,
 	server_config: Arc<RwLock<ServerConfig>>,
 ) {
 	loop {
 		if let Ok((stream, _)) = listener.accept().await {
-			let client = client.clone();
 			let dynamic_config = dynamic_config.clone();
 			let server_config = Arc::new(server_config.read().unwrap().internal.clone());
 
@@ -106,7 +90,7 @@ async fn serve_secure(
 				let io = TokioIo::new(tls_stream);
 
 				auto::Builder::new(TokioExecutor::new())
-					.serve_connection_with_upgrades(io, Proxy::new_secure(client, dynamic_config))
+					.serve_connection_with_upgrades(io, Proxy::new_secure(dynamic_config))
 					.await
 			});
 		}
